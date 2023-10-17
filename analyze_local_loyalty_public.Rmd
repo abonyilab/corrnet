@@ -1,0 +1,1189 @@
+---
+title: "Analyzing local loyalty"
+output: pdf_document
+---
+
+This organized code series, accompanied by section headings, provides an in-depth exploration of the methods employed for analyzing local loyalty. The code reads the data once the necessary program packages are loaded. Please note that, regrettably, the database is not publicly accessible. The data was collected through a questionnaire where respondents provided ratings using a Likert scale.
+
+Structural Equation Modeling (SEM) was applied to assess the relationships between demographic variables and local loyalty. However, it's worth mentioning that SEM can be adapted for various correlation analyses.
+
+The Chi-squared (Chi2) test is a valuable tool for visualizing and quantifying associations between categorical variables. In this code series, the mosaic() function is used to perform an extensive statistical analysis of cross-tabulated data.
+
+LCA cluster analysis was utilized to define loyalty groups, treating them as categorical variables for subsequent analyses.
+
+To determine loyalty group membership, machine learning techniques were employed, specifically a random forest procedure. A classification task was defined, with explanatory variables serving as predictors and loyalty groups, as defined by LCA, acting as outcome variables. The Random Forest model identifies key predictors, which are also detailed in the related article.
+
+For response category-level analyses, a correlation network was generated using the ARM package. This approach allows for a deeper exploration of the data's intricacies.
+
+#Libraries
+
+```{r}
+#Data wrangling
+library(dplyr)
+library(reshape2)
+
+#Chi2
+library(vcd)
+
+#SEM
+library(seminr)
+library(fastDummies)
+
+#LCA
+library(poLCA)
+
+#Radom Forest
+library(randomForest)
+
+#ARM
+library(arules)
+library(arulesViz)
+
+#plots 
+library(visNetwork)
+library(ggplot2)
+library(extrafont)
+library(stringr)
+```
+
+#Read data
+
+```{r}
+resp <- read.csv("resp.csv", sep = ";")
+```
+
+#SEM (Structural Equation Modelling)
+
+##Age
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "gen")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","gen")
+```
+
+```{r}
+table(dat$loy1)
+table(dat$loy2)
+table(dat$loy3)
+table(dat$loy4)
+table(dat$gen)
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(gen=dplyr::recode(gen, '1'='1', '2'='1', '3'='2', '4'='3', '5'='4')) #merging of older generations
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat),]
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","gen"))
+head(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("X", single_item("gen_2")),
+  composite("Y", single_item("gen_3")),
+  composite("Z", single_item("gen_4")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("X", "Y", "Z"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement)
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Financial circumastances
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "Q59")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","fin")
+```
+
+```{r}
+table(dat$fin)
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+ # mutate(fin=dplyr::recode(fin, '1'='1', '2'='2', '3'='3')) %>% 
+  mutate_at('fin', ~replace_na(.,-99))
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","fin"))
+head(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("Poor", single_item("fin_1")),
+  composite("Average", single_item("fin_2")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Poor", "Average"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Satisfaction with job
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "Q6_5")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","sat")
+```
+
+```{r}
+table(dat$sat)
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(sat=dplyr::recode(sat, '1'='1', '2'='1', '3'='2', '4'='3', '9'='-99'))
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","sat"))
+head(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("Unsatisfied", single_item("sat_1")),
+  composite("Satisfied", single_item("sat_2")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Unsatisfied", "Satisfied"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Commuting
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "Q53")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","com")
+```
+
+```{r}
+table(dat$com)
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(com=dplyr::recode(com, '1'='1', '2'='2', '3'='2'))
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+
+dat$com[which(is.na(dat$com))] <- -99
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","com"))
+head(dat)
+colnames(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("Other settlement", single_item("com_2")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Other settlement"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Happiness
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "Q6_4")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","hap")
+```
+
+```{r}
+table(dat$hap)
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(hap=dplyr::recode(hap, '1'='1', '2'='1', '3'='2', '4'='3', '9'='-99'))
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+
+#dat$com[which(is.na(dat$com))] <- -99
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","hap"))
+head(dat)
+colnames(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("Unhappy", single_item("hap_1")),
+  composite("Happy", single_item("hap_2")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Unhappy", "Happy"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Neighbour
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "ID2")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","nei")
+```
+
+```{r}
+table(dat$nei)
+sum(table(dat$nei))
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) 
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+
+#dat$com[which(is.na(dat$com))] <- -99
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","nei"))
+head(dat)
+colnames(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("Dozsa", single_item("nei_2")),
+  composite("Ipar", single_item("nei_3")),
+  composite("Jeruzsalem", single_item("nei_4")),
+  composite("Egyetem", single_item("nei_5")),
+  composite("Cholnoky", single_item("nei_6")),
+  composite("Jutasi", single_item("nei_7")),
+  composite("Kadarta", single_item("nei_8")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Dozsa", "Ipar", "Jeruzsalem", "Egyetem", "Cholnoky", "Jutasi", "Kadarta"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+##Time spent in the city in a year
+
+```{r}
+#what to test
+dat <- resp %>% dplyr::select("Q1_1","Q6_1","Q6_2","Q29_4", #local loyalty
+                              "Q51")
+colnames(dat) <- c("loy1","loy2","loy3","loy4","mon")
+```
+
+```{r}
+table(dat$mon)
+sum(table(dat$mon))
+```
+
+```{r}
+dat <- dat %>% mutate(loy1=dplyr::recode(loy1, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(loy2=dplyr::recode(loy2, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy3=dplyr::recode(loy3, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>%
+  mutate(loy4=dplyr::recode(loy4, '1'='1', '2'='2', '3'='3', '4'='4', '9'='NA')) %>% 
+  mutate(mon=dplyr::recode(mon, '1'='1', '2'='1', '3'='2', '4'='3', '9'='-99'))
+
+dat[] <- sapply(dat, as.numeric)
+dat <- dat[complete.cases(dat[ , c('loy1', 'loy2', 'loy3', 'loy4')]),]
+
+#dat$com[which(is.na(dat$com))] <- -99
+```
+
+```{r}
+dat <- dummy_cols(dat, select_columns = c("loy1","loy2","loy3","loy4","mon"))
+head(dat)
+colnames(dat)
+```
+
+```{r}
+# Create measurement model
+simple_mm <- constructs(
+  composite("Loyalty", multi_items("loy", 1:4)),
+  composite("0-6 month", single_item("mon_1")),
+  composite("7-11 month", single_item("mon_2")))
+
+# Create structural model
+simple_sm <- relationships(
+  paths(from = c("Less than 6 month", "7-11 month"), to = "Loyalty"))
+
+# Estimate the model
+simple_model <- estimate_pls(data = dat,
+ measurement_model = simple_mm,
+ structural_model = simple_sm,
+ missing = mean_replacement,
+ missing_value = "-99")
+
+# Summarize the model results
+summary_simple <- summary(simple_model)
+summary_simple
+```
+
+```{r}
+# Bootstrap the model on the PLS Estimated Model
+boot_model <- bootstrap_model(
+  seminr_model = simple_model,
+  nboot = 5000,
+  cores = parallel::detectCores(),
+  seed = 123)
+
+# alpha sets the specified level for significance, i.e. 0.05
+summary_boot <- summary(boot_model, alpha = 0.05)
+
+# Inspect the bootstrapped structural paths
+summary_boot$bootstrapped_paths
+```
+
+#Chi2 test
+
+```{r}
+x <- resp$loy
+y <- resp$Q59
+table(x,y)
+prop.table(table(x,y),1)
+prop.table(table(y))
+z <- as.data.frame.matrix(table(x,y))
+mosaic(table(x,y), shade = TRUE, labeling = TRUE)
+```
+
+#LCA (Latent class analysis)
+
+##Setting up
+
+```{r}
+f <- cbind(Q1_1,Q6_1,Q6_2,Q29_4) ~ 1
+```
+
+```{r}
+set.seed(12300)
+lc <- poLCA(f, dat_lat, nclass = 4, maxiter = 50000, graphs = FALSE, na.rm = TRUE, nrep =  10, verbose = TRUE)
+```
+
+```{r}
+table(lc$predclass)
+prop.table(table(lc$predclass))
+sum(table(lc$predclass))
+```
+
+##Plotdata
+
+```{r}
+x1 <- as.data.frame(lc$probs[1])[,c(1:4)]
+x1$class <- 1:4
+
+x2 <- as.data.frame(lc$probs[2])[,c(1:4)]
+x2$class <- 1:4
+
+x3 <- as.data.frame(lc$probs[3])[,c(1:4)]
+x3$class <- 1:4
+
+x4 <- as.data.frame(lc$probs[4])[,c(1:4)]
+x4$class <- 1:4
+
+longdata <- reshape(data=x1,
+                    direction = "long",
+                    varying = names(x1)[1:4],
+                    v.names = "class",
+                    times = names(x1)[1:4])
+
+longdata1 <- reshape(data=x2,
+                    direction = "long",
+                    varying = names(x2)[1:4],
+                    v.names = "class",
+                    times = names(x2)[1:4])
+longdata <- rbind(longdata,longdata1)
+
+longdata1 <- reshape(data=x3,
+                    direction = "long",
+                    varying = names(x3)[1:4],
+                    v.names = "class",
+                    times = names(x3)[1:4])
+longdata <- rbind(longdata,longdata1)
+
+longdata1 <- reshape(data=x4,
+                    direction = "long",
+                    varying = names(x4)[1:4],
+                    v.names = "class",
+                    times = names(x4)[1:4])
+longdata <- rbind(longdata,longdata1)
+
+longdata$variable <- rep(c("Q1_1","Q6_1","Q6_2","Q29_4"), each=16)
+longdata$time <- rep(1:4, each=4)
+
+colnames(longdata) <- c("value","time","clust","variable")
+```
+
+##Plot
+
+```{r}
+fac.variable <- c("Engage",
+              "Relevance",
+              "Future intention",
+              "Rational ties")
+
+names(fac.variable) <- c("Q1_1","Q6_1","Q6_2","Q29_4")
+```
+
+```{r}
+fac.clust <- c("Loyal\n41%",
+                "Least loyal\n9%",
+                "Semi-loyal\n13%",
+                "Very loyal\n37%")
+names(fac.clust) <- c(1,2,3,4)
+longdata$clust <- factor(longdata$clust, levels=c(4,1,3,2))
+```
+
+```{r}
+ggplot(longdata, aes(x=time, y=value)) + geom_bar(color="black", fill="skyblue", 
+                                                  stat = "identity") + 
+  scale_x_discrete(limits=1:4) +
+  labs(x="",y="", title="") +
+  facet_grid(clust~variable, 
+             labeller=labeller(variable=fac.variable, clust=fac.clust)) +
+  theme_bw() +
+  theme(strip.text = element_text(family = "Calibri"),
+        axis.text = element_text(family = "Calibri"))
+```
+
+```{r}
+ggsave("LCA_plot.jpg", dpi = 300, height = 5, width = 5.5)
+```
+
+
+#RF (Random Forest)
+
+##Data
+
+```{r}
+#dependent: loyalty levels
+#independent: all other variables
+
+dat3 <- resp %>% dplyr::select(-one_of("id","Q1_1","Q29_4","Q6_1","Q6_2"))
+colnames(dat3)                        
+```
+
+```{r}
+#some conversions
+summary(dat3)
+sapply(dat3, class)
+colnames(dat3)
+colSums(is.na(dat3))
+dat3[is.na(dat3)] <- 0
+
+#convert to factor
+col.names <- colnames(dat3)
+dat3[,col.names] <- lapply(dat3[,col.names], as.factor)
+sapply(dat3, class)
+```
+
+##Split traint-test
+
+```{r}
+set.seed(123)
+sample <- sample.split(dat3$loy, SplitRatio = .75)
+
+train <- subset(dat3, sample == TRUE)
+test <- subset(dat3, sample == FALSE)
+
+dim(train)
+dim(test)
+
+#train <- train %>% dplyr::select(-one_of("Q3x5.11.", "Q3x5.7."))
+#test <- test %>% dplyr::select(-one_of("Q3x5.11.", "Q3x5.7."))
+```
+
+##Optimize parameters
+
+###ntree
+
+```{r}
+model <- randomForest(loy ~ ., data=train, proximity=TRUE, ntree=1000)
+
+model
+
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(model$err.rate), times=5),
+  Type=rep(c("OOB", "1", "2", "3", "4"), each=nrow(model$err.rate)),
+  Error=c(model$err.rate[,"OOB"], 
+    model$err.rate[,"1"], 
+    model$err.rate[,"2"],
+    model$err.rate[,"3"],
+    model$err.rate[,"4"]
+))
+
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +
+  geom_line(aes(color=Type))
+```
+
+
+###mtry
+
+```{r}
+# mtry (to control how many variables are considered at each step)
+# default value is sqrt(number of variables) for classification
+
+oob.values <- vector(length=15)
+
+set.seed(112200)
+
+for(i in 1:15) {
+  temp.model <- randomForest(loy ~ ., data=train, mtry=2*i, ntree=400)
+  oob.values[i] <- temp.model$err.rate[nrow(temp.model$err.rate),1]
+}
+
+oob.values
+## find the minimum error
+min(oob.values)
+## find the optimal value for mtry...
+which(oob.values == min(oob.values))
+```
+
+
+###Fit model
+
+```{r}
+set.seed(111)
+rf <- randomForest(loy ~ ., data = train, 
+                   ntree = 400, mtry = 24, 
+                   importance = TRUE)
+rf
+```
+
+```{r}
+colnames(test)
+pred <- predict(rf, newdata = test[,-128]) #remove dependent variable
+
+table(test$loy, pred)
+
+sum(diag(table(test$loy, pred)))/sum(table(test$loy, pred))
+1-sum(diag(table(test$loy, pred)))/sum(table(test$loy, pred))
+```
+
+##Var importance
+
+```{r}
+varImpPlot(rf)
+```
+
+```{r}
+varimp <- as.data.frame(rf$importance)
+
+plotdata <- data.frame(y=rownames(varimp),
+                       x=varimp$MeanDecreaseAccuracy)
+plotdata <- plotdata %>% arrange(-x) %>% top_n(10)
+plotdata$y_names <- c("I want my children to live here",
+                      "Attachment to the sub-region",
+                      "Living in a neighbourhood",
+                      "I try to use local entrepreneur\nto do the work around my house/flat",
+                      "Attachment to the region",
+                      "I'm satisfy with my work",
+                      "I'm a happy person",
+                      "I'm satisfied with the historical sites",
+                      "Work-life balance",
+                      "I'm satisfied with the book stores")
+```
+
+```{r}
+plotdata %>% mutate(y_names=factor(y_names, levels=y_names)) %>%
+ggplot(aes(x=y_names, y=x)) +
+  geom_segment( aes(x=y_names, xend=y_names, y=0, yend=x), color="skyblue") +
+  geom_point(shape=21, color="skyblue", fill="white", size=2, stroke=2) +
+  labs(x="", y="Feature importance", 
+       title="") +
+  theme_light() +
+  coord_flip() +
+  scale_x_discrete(limits=rev) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y = element_text(size=12, family = "Calibri"),
+    axis.title = element_text(family = "Calibri"),
+    axis.text.x = element_text(family = "Calibri"),
+    plot.title = element_text(family = "Calibri", size=12))
+```
+
+
+```{r}
+ggsave("varimp.png", dpi=300, height = 4.6, width = 6.3)
+```
+
+#Kruskal-Wallis test
+
+```{r}
+kruskal.test(Q6_3 ~ loy, data = resp)
+kruskal.test(Q1_2 ~ loy, data = resp)
+kruskal.test(ID2 ~ loy, data = resp)
+kruskal.test(Q29_3 ~ loy, data = resp)
+kruskal.test(Q6_5 ~ loy, data = resp)
+kruskal.test(Q1_3 ~ loy, data = resp)
+kruskal.test(Q6_4 ~ loy, data = resp)
+kruskal.test(Q24b_11 ~ loy, data = resp)
+kruskal.test(Q6_7 ~ loy, data = resp)
+kruskal.test(Q24b_9 ~ loy, data = resp)
+```
+
+#ARM (Association rule mining)
+
+Suggestion:
+https://www.philippe-fournier-viger.com/spmf/index.php
+
+##Transactions
+
+###Data
+
+```{r}
+#create longData and
+#modify scale values if needed
+longData <- melt(resp, id.vars = "id")
+
+#check
+table(longData$value)
+```
+
+```{r}
+#prepare data to transaction set
+longData <- cbind(longData, to.dummy(longData$value, "value"))
+
+longData <- longData %>% dplyr::select(-one_of("value", "value.NA"))
+```
+
+###Transaction set
+
+```{r}
+#create transaction data frame to arules transactions
+transactions <- reshape(longData, idvar = "id", timevar = "variable", direction = "wide")
+
+#which answer categories should be deleted because empty or full
+colnames(transactions)[which(colSums(transactions, na.rm=TRUE) %in% 0)]
+colnames(transactions)[which(colSums(transactions, na.rm=TRUE) %in% nrow(transactions))]
+
+#empty or full columns should be deleted to avoid bias
+transactions <- transactions %>% dplyr::select(which(!colSums(transactions, na.rm=TRUE) %in% c(0,1)))
+transactions <- transactions %>% dplyr::select(which(!colSums(transactions, na.rm=TRUE) %in%
+                                                nrow(transactions)))
+
+#rename columns to improve readability
+#e.g. instead of value.0.Q3x2.7. --> Q3x2.7._0 ("variable name"_"variable value")
+#colnames(transactions)
+colnames(transactions) <- str_remove(colnames(transactions), "value.")
+colnames(transactions) <- paste0(colnames(transactions), "_", 
+                                 substr(colnames(transactions), start = 1, stop = 2))
+colnames(transactions) <- substr(colnames(transactions), 
+                                 start = 3, 
+                                 stop = nchar(colnames(transactions))-1)
+colnames(transactions)[1] <- "id"
+```
+
+```{r}
+#create transaction matrix for arules
+tr.m <- as.matrix(transactions[,-which(colnames(transactions)=="id")])
+tr.m <- as(tr.m, "itemMatrix")
+```
+
+##Create length 2 edge list
+
+A --> B association rules (if A then B)
+
+```{r}
+edges <- data.frame()
+
+for (i in 1:(ncol(transactions)-1)){
+rules <- apriori(data=tr.m,
+                 parameter=list(supp = 0.001, conf = 0.001, 
+                                minlen = 2, #length 2
+                                maxlen = 2, 
+                                maxtime = 10000,
+                                target="rules"),
+                 appearance=list(rhs=colnames(transactions)[i+1]),
+                 control = list(verbose=F)
+)
+intme <- interestMeasure(rules, transactions = tr.m,
+                         measure = c("rulePowerFactor", "addedValue", "cosine", "collectiveStrength", "leverage", "kappa", "chiSquared", "phi", "fishersExactTest", "hyperConfidence", "hyperLift", "lambda", "doc", "leastContradiction", "oddsRatio", "yuleY", "RLD", "sebag", "importance", "jaccard", "imbalance", "kulczynski", "conviction", "mutualInformation", "jMeasure"))
+
+quality(rules) <- cbind(quality(rules),intme)
+df = DATAFRAME(rules, itemSep = ",", setStart="", setEnd="")
+df$LHS <- as.character(df$LHS)
+df$RHS <- as.character(df$RHS)
+df <- df[df$count!=0,]
+edges <- rbind(edges, df)
+}
+
+edges$relrisk <- edges$confidence/(edges$confidence-edges$doc) #relative risk not implemented
+edges$modcos <- edges$cosine-sqrt(edges$support-edges$leverage) #modified cosine --> own measure
+```
+
+```{r}
+write.csv2(edges, "edges_length2.csv", row.names = FALSE)
+```
+
+##Create length 3 edge list
+
+A&B --> C association rules (If A union/and B, then C)
+
+This rules provided opportunity to analyze the loyalty of people with unsufficient social relationship
+
+```{r}
+edges <- data.frame()
+
+rules <- apriori(data=tr.m,
+                 parameter=list(supp = 0.001, conf = 0.001, 
+                                minlen = 3, #length 2
+                                maxlen = 3, 
+                                maxtime = 10000,
+                                target="rules"),
+                 appearance=list(rhs=list("loy_1", "loy_2", "loy_3", "loy_4")),
+                 control = list(verbose=F)
+)
+
+intme <- interestMeasure(rules, transactions = tr.m,
+                         measure = c("rulePowerFactor", "addedValue", "cosine", "collectiveStrength", "leverage", "kappa", "chiSquared", "phi", "fishersExactTest", "hyperConfidence", "hyperLift", "lambda", "doc", "leastContradiction", "oddsRatio", "yuleY", "RLD", "sebag", "importance", "jaccard", "imbalance", "kulczynski", "conviction", "mutualInformation", "jMeasure"))
+
+quality(rules) <- cbind(quality(rules),intme)
+df = DATAFRAME(rules, itemSep = ",", setStart="", setEnd="")
+df$LHS <- as.character(df$LHS)
+df$RHS <- as.character(df$RHS)
+df <- df[df$count!=0,]
+edges <- rbind(edges, df)
+
+
+edges$relrisk <- edges$confidence/(edges$confidence-edges$doc) #relative risk not implemented in R
+edges$modcos <- edges$cosine-sqrt(edges$support-edges$leverage) #modified cosine --> our measure
+```
+
+```{r}
+write.csv2(edges, "edges_length3.csv", row.names = FALSE)
+```
+
+##Association network
+
+###Edges
+
+```{r}
+df1 <- read.csv2(edges_length2.csv, sep = ";")
+```
+
+```{r}
+#filter correlated rules by several measures
+edges1 <- df1[df1$sign==1 & 
+                df1$cosine>=0.3 &
+                df1$relativeAdded>=0.4 &
+                df1$addedValue>=0.05 &
+                df1$phi>=0.15 &
+                df1$confidence.x>=0.25
+              ,]
+edges1$LHS <- as.character(edges1$LHS)
+edges1$RHS <- as.character(edges1$RHS)
+```
+
+```{r}
+edge <- data.frame(
+  from=edges1[,"LHS"],
+  to=edges1[,"RHS"],
+  smooth=c(TRUE),
+  width=edges1$count/50,
+  color="#5080b1",
+  stringsAsFactors = FALSE
+)
+```
+
+###Nodes
+
+```{r}
+##node tábla
+node <- data.frame(
+  id=unique(c(edges1$LHS,edges1$RHS)),
+  label=unique(c(edges1$LHS,edges1$RHS)),
+  shape="circle",
+  shadow=c(FALSE),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+node$variable <- gsub("\\..*","",node$label)
+node$answer <- gsub(".*\\.","",node$label)
+node$answer <- as.numeric(node$answer)
+```
+
+```{r}
+#color of nodes in general
+node$color.border[node$answer==4] <- "#77933c" #green
+node$color.border[node$answer==3] <- "#c3d69b" #light green
+node$color.border[node$answer==2] <- "#e6b9b8" #right red
+node$color.border[node$answer==1] <- "#953735" #red
+```
+
+```{r}
+#color of exceptional nodes (some variable measured with reversed scale or dummy)
+node$color.border[node$answer==1 & node$variable=="Q33a"] <- "#953735" #red 
+node$color.border[node$answer==2 & node$variable=="Q33a"] <- "#77933c" #green
+
+node$color.border[node$answer==1 & node$variable=="Q31"] <- "#953735" #red
+node$color.border[node$answer==2 & node$variable=="Q31"] <- "#77933c" #green
+
+node$color.border[which(node$answer==1 & startsWith(node$variable, "Q32"))] <- "#953735" #red
+node$color.border[which(node$answer==2 & startsWith(node$variable, "Q32"))] <- "#77933c" #green
+
+#dependent variables
+node$color.border[which(node$variable %in% c("loy","dev","bet","pri"))] <- "#80ffff" #turquoise
+
+#demography
+node$color.border[which(node$variable %in% c("ID","gen","Q50","Q57","Q59"))] <- "#3399ff" #dark blue
+
+```
+
+```{r}
+node$color.background <- "white"
+node$color.highlight <- "yellow"
+```
+
+###Plot
+
+```{r}
+nw <- 
+  visNetwork(node, edge, height = "1000px", width = "100%") %>% 
+  visOptions(highlightNearest = TRUE, selectedBy = "label") %>% 
+  visInteraction(dragNodes = TRUE, 
+                 dragView = TRUE, 
+                 zoomView = TRUE,
+                 hideEdgesOnDrag = FALSE) %>%
+  visNodes(physics=FALSE, size=16, borderWidth = 1, font=list(face="calibri")) %>%
+  visEdges(arrows=list(to=list(enabled=T, scaleFactor=1))) %>% 
+  visIgraphLayout(#layout = "layout_in_circle",
+                  type="full")
+
+visSave(nw, file="nw_associations_20200602_v1.html")
+```
+
+##Association subnetwork
+
+This code sequence draw a piece of the whole network.
+
+###Edges
+
+```{r}
+#Filter the questionable LHS-RHS
+
+#social relational (could get help in problems) & loyalty level variables
+df1_sub <- df1[startsWith(df1$LHS,"Q16c") | startsWith(df1$LHS,"Q16d") | 
+                 startsWith(df1$LHS, "loy"),]
+df1_sub <- df1_sub[startsWith(df1_sub$RHS, "loy") | startsWith(df1_sub$RHS,"Q16c") | startsWith(df1_sub$RHS,"Q16d") ,]
+
+#subset about get help from friends, neighbours, colleagues
+df1_sub <- df1_sub[which(sub("\\..*", "", df1_sub$LHS) %>% sub(".*_", "", .) %>% as.numeric() %in% c(1,2,3,4)),] 
+
+df1_sub <- df1_sub[c(which(sub("\\..*", "", df1_sub$RHS) %>% sub(".*_", "", .) %>% as.numeric() %in% c(1,2,3,4)), which(startsWith(df1_sub$RHS, "loy"))),] 
+
+#significant associations
+df1_sub <- df1_sub[df1_sub$sign==1,]
+
+#more correlated rules
+df1_sub <- df1_sub[df1_sub$cosine>=0.18 & 
+                     df1_sub$addedValue>=0.03 & 
+                     df1_sub$relativeAdded>=0.08,]
+```
+
+```{r}
+edge <- data.frame(
+  from=df1_sub[,"LHS"],
+  to=df1_sub[,"RHS"],
+  smooth=c(TRUE),
+  width=df1_sub$count/50,
+  color="#95b3d0", #"#5080b1",
+  stringsAsFactors = FALSE
+)
+```
+
+###Nodes
+
+```{r}
+node <- data.frame(
+  id=unique(c(df1_sub$LHS,df1_sub$RHS)),
+  label=unique(c(df1_sub$LHS,df1_sub$RHS)),
+  shape="circle",
+  shadow=c(FALSE),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+node$variable <- gsub("\\..*","",node$label)
+node$answer <- gsub(".*\\.","",node$label)
+node$answer <- as.numeric(node$answer)
+```
+
+```{r}
+#color of nodes in general
+node$color.border[node$answer==4] <- "#77933c" #green
+node$color.border[node$answer==3] <- "#c3d69b" #light green
+node$color.border[node$answer==2] <- "#e6b9b8" #light red
+node$color.border[node$answer==1] <- "#953735" #red
+```
+
+```{r}
+#color of exceptional nodes (some variable measured with reversed scale or dummy)
+node$color.border[node$answer==1 & node$variable=="Q33a"] <- "#953735" #red 
+node$color.border[node$answer==2 & node$variable=="Q33a"] <- "#77933c" #green
+
+node$color.border[node$answer==1 & node$variable=="Q31"] <- "#953735" #red
+node$color.border[node$answer==2 & node$variable=="Q31"] <- "#77933c" #green
+
+node$color.border[which(node$answer==1 & startsWith(node$variable, "Q32"))] <- "#953735" #red
+node$color.border[which(node$answer==2 & startsWith(node$variable, "Q32"))] <- "#77933c" #green
+
+#explained variables
+node$color.border[which(node$variable %in% c("loy","dev","bet","pri"))] <- "#80ffff" #turquoise
+
+#demography
+node$color.border[which(node$variable %in% c("ID","gen","Q50","Q57","Q59"))] <- "#3399ff" #dark blue
+
+```
+
+```{r}
+node$color.background <- "white"
+node$color.highlight <- "yellow"
+```
+
+```{r}
+node[node$variable %in% c("loy","dev","bet","pri"),"shape"] <- "triangle"
+```
+
+```{r}
+node[which(startsWith(node$label,"Q16c")), "shape"] <- "box"
+```
+
+###Plot
+
+```{r}
+nw <- 
+  visNetwork(node, edge, height = "1000px", width = "100%") %>% 
+  visOptions(highlightNearest = TRUE, selectedBy = "label") %>% 
+  visInteraction(dragNodes = TRUE, 
+                 dragView = TRUE, 
+                 zoomView = TRUE,
+                 hideEdgesOnDrag = FALSE) %>%
+  visNodes(physics=FALSE, size=16, borderWidth = 1, font=list(face="calibri")) %>%
+  visEdges(arrows=list(to=list(enabled=T, scaleFactor=1))) %>% 
+  visIgraphLayout(#layout = "layout_in_circle",
+                  type="full")
+
+visSave(nw, file="nw_associations_loy_20200602_v2.html")
+```
+
+
+
+
+
+
